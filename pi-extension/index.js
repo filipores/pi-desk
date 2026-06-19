@@ -555,6 +555,9 @@ export default function piTodoExtension(pi) {
       const filtered = commands.filter((command) => command.startsWith(prefix));
       return filtered.length ? filtered.map((command) => ({ value: command, label: command.trim() || command })) : null;
     },
-    handler: (args, ctx) => handleTodoCommand(args, ctx, pi),
+    handler: async (args, ctx) => {
+      const result = await handleTodoCommand(args, ctx, pi);
+      pi.sendMessage?.({ customType: "pi-todo", content: result.message, display: true, details: { ok: result.ok } });
+    },
   });
 }
