@@ -403,16 +403,15 @@ export function parseAgentJson(output) {
   }
 }
 
-function buildPrioritizationPrompt(project, contextFiles, answers) {
+function buildPrioritizationPrompt(project, contextFiles) {
   const inbox = project.items.map((item) => ({
     id: item.id,
     text: item.text,
     manualRank: Number.isInteger(item.manualRank) ? item.manualRank : null,
   }));
   const context = contextFiles.map((file) => `# ${file.path}\n${file.text}`).join("\n\n---\n\n") || "(kein Kontext ausgewählt)";
-  const clarification = answers.length ? JSON.stringify(answers, null, 2) : "[]";
 
-  return `Du priorisierst eine persönliche Projekt-Inbox.\n\nRegeln:\n- Erzeuge eine lineare Rangliste aller offenen Inbox-Einträge, keine Buckets, keine Scores.\n- Respektiere manualRank exakt, wenn gesetzt.\n- Bestimme die Priorität selbst aus Projektkontext, Nutzerzielen und Inbox-Texten.\n- Default-Kriterium: größter nächster Nutzen für das Projekt, bei ähnlichem Nutzen zuerst Risiko/Blocker und danach kleine schnell shipbare Schritte.\n- Gründe sind kurz und in der Sprache der Inbox-Einträge.\n- Wenn eine fachlich notwendige Information fehlt, antworte nur mit {"question":"..."}.\n- Wenn die Rangliste belastbar ist, antworte nur mit {"items":[{"id":1,"reason":"kurzer Grund"}]}.\n\nKontext:\n${context}\n\nBisherige Klärungen:\n${clarification}\n\nInbox:\n${JSON.stringify(inbox, null, 2)}`;
+  return `Du priorisierst eine persönliche Projekt-Inbox.\n\nRegeln:\n- Erzeuge immer eine lineare Rangliste aller offenen Inbox-Einträge, keine Buckets, keine Scores.\n- Stelle keine Rückfragen. Triff die beste Entscheidung aus Projektkontext, Nutzerzielen und Inbox-Texten.\n- Respektiere manualRank exakt, wenn gesetzt.\n- Default-Kriterium: größter nächster Nutzen für das Projekt, bei ähnlichem Nutzen zuerst Risiko/Blocker und danach kleine schnell shipbare Schritte.\n- Gründe sind kurz und in der Sprache der Inbox-Einträge.\n- Antworte nur mit {"items":[{"id":1,"reason":"kurzer Grund"}]}.\n\nKontext:\n${context}\n\nInbox:\n${JSON.stringify(inbox, null, 2)}`;
 }
 
 function emit(ctx, text, level = "info") {
@@ -438,12 +437,6 @@ async function runPiNoTools(pi, prompt, ctx) {
   );
   if (result?.code) throw new Error(result.stderr || result.stdout || `pi exited ${result.code}`);
   return result?.stdout ?? result?.output ?? "";
-}
-
-async function askInput(ctx, title, placeholder) {
-  if (!ctx?.hasUI || !ctx.ui?.input) return undefined;
-  const value = await ctx.ui.input(title, placeholder);
-  return typeof value === "string" ? value.trim() : undefined;
 }
 
 async function setupContext(ctx, project) {
@@ -480,28 +473,17 @@ async function prioritizeProject(pi, ctx, project) {
   }
 
   const contextFiles = collectContextFiles(ctx, project);
-  const answers = [];
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    let parsed;
-    try {
-      const output = await runPiNoTools(pi, buildPrioritizationPrompt(project, contextFiles, answers), ctx);
-      parsed = parseAgentJson(output);
-    } catch {
-      emit(ctx, "Priorisierung-Agent nicht verfügbar; bestehende Reihenfolge beibehalten.", "warning");
-      return false;
-    }
-
-    if (typeof parsed?.question === "string" && parsed.question.trim()) {
-      const answer = await askInput(ctx, "Klärungsfrage", parsed.question.trim());
-      if (!answer) break;
-      answers.push({ question: parsed.question.trim(), answer });
-      continue;
-    }
-
-    if (applyRanking(project, parsed?.items)) return true;
-    break;
+  let parsed;
+  try {
+    const output = await runPiNoTools(pi, buildPrioritizationPrompt(project, contextFiles), ctx);
+    parsed = parseAgentJson(output);
+  } catch {
+    emit(ctx, "Priorisierung-Agent nicht verfügbar; bestehende Reihenfolge beibehalten.", "warning");
+    return false;
   }
+
+  if (applyRanking(project, parsed?.items)) return true;
 
   emit(ctx, "Priorisierung unklar; bestehende Reihenfolge beibehalten.", "warning");
   return false;
