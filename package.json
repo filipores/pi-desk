@@ -1,0 +1,29 @@
+{
+  "name": "pi-todo",
+  "version": "0.1.0",
+  "description": "Project-scoped personal prioritized inbox list for pi.",
+  "repository": "github:filipores/pi-todo",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "todo",
+    "prioritization"
+  ],
+  "license": "MIT",
+  "files": [
+    "CONTEXT.md",
+    "LICENSE",
+    "PLAN.md",
+    "README.md",
+    "pi-extension/index.js",
+    "pi-extension/package.json"
+  ],
+  "scripts": {
+    "test": "npm test --prefix pi-extension"
+  },
+  "pi": {
+    "extensions": [
+      "./pi-extension/index.js"
+    ]
+  }
+}
