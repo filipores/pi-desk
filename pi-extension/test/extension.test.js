@@ -11,6 +11,7 @@ import piTodoExtension, {
   findProjectRoot,
   handleTodoCommand,
   isSafeContextFile,
+  loadAllProjects,
   loadProject,
   moveItem,
   parseTodoCommand,
@@ -42,6 +43,7 @@ test("parses todo commands", () => {
   assert.deepEqual(parseTodoCommand(""), { type: "list" });
   assert.deepEqual(parseTodoCommand("buy milk"), { type: "add", text: "buy milk" });
   assert.deepEqual(parseTodoCommand("sort"), { type: "sort" });
+  assert.deepEqual(parseTodoCommand("all"), { type: "all" });
   assert.deepEqual(parseTodoCommand("setup"), { type: "setup" });
   assert.deepEqual(parseTodoCommand("clear"), { type: "clear" });
   assert.deepEqual(parseTodoCommand("done 3"), { type: "done", id: 3 });
@@ -96,6 +98,41 @@ test("stores add list done move clear as private project JSON", (t) => {
 
   assert.equal(clearItems(loaded), 2);
   assert.equal(loaded.items.length, 0);
+});
+
+test("all lists open items from every stored project", async (t) => {
+  const store = tempDir(t);
+  const current = tempDir(t);
+  const firstRoot = tempDir(t);
+  const secondRoot = tempDir(t);
+  const emptyRoot = tempDir(t);
+  writeFileSync(path.join(firstRoot, "CONTEXT.md"), "api_key=not-for-all");
+
+  const first = loadProject(firstRoot, store);
+  addItem(first, "first project task");
+  first.contextFiles = ["CONTEXT.md"];
+  saveProject(first, store);
+
+  const second = loadProject(secondRoot, store);
+  addItem(second, "second project task");
+  saveProject(second, store);
+
+  saveProject(loadProject(emptyRoot, store), store);
+  mkdirSync(path.dirname(projectFileFor(current, store)), { recursive: true });
+  writeFileSync(projectFileFor(current, store), "{");
+
+  const allProjects = loadAllProjects(store);
+  assert.deepEqual(allProjects.find((project) => project.projectRoot === firstRoot).contextFiles, []);
+
+  const result = await handleTodoCommand("all", { cwd: current, hasUI: false, ui: { notify: () => {} } }, {}, { baseDir: store });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.message.includes(`${path.basename(firstRoot)} — ${firstRoot}`));
+  assert.ok(result.message.includes("#1 first project task"));
+  assert.ok(result.message.includes(`${path.basename(secondRoot)} — ${secondRoot}`));
+  assert.ok(result.message.includes("#1 second project task"));
+  assert.equal(result.message.includes(`${path.basename(emptyRoot)} — ${emptyRoot}`), false);
+  assert.equal(result.message.includes("api_key=not-for-all"), false);
 });
 
 test("load ignores symlinked project JSON", (t) => {

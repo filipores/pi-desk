@@ -40,6 +40,7 @@ export function parseTodoCommand(args = "") {
   if (!text) return { type: "list" };
 
   if (/^sort$/i.test(text)) return { type: "sort" };
+  if (/^all$/i.test(text)) return { type: "all" };
   if (/^setup$/i.test(text)) return { type: "setup" };
   if (/^clear$/i.test(text)) return { type: "clear" };
 
@@ -91,14 +92,16 @@ function emptyProject(projectRoot) {
   };
 }
 
-function normalizeProject(raw, projectRoot) {
+function normalizeProject(raw, projectRoot, options = {}) {
   const project = emptyProject(projectRoot);
   if (!raw || typeof raw !== "object") return project;
 
   project.setupComplete = raw.setupComplete === true;
-  project.contextFiles = Array.isArray(raw.contextFiles)
-    ? sanitizeContextFiles(project.projectRoot, raw.contextFiles)
-    : [];
+  project.contextFiles = options.skipContextFiles
+    ? []
+    : Array.isArray(raw.contextFiles)
+      ? sanitizeContextFiles(project.projectRoot, raw.contextFiles)
+      : [];
   project.nextId = Number.isInteger(raw.nextId) && raw.nextId > 0 ? raw.nextId : 1;
   project.items = Array.isArray(raw.items)
     ? raw.items
@@ -132,6 +135,29 @@ function ensurePrivateDir(dir) {
   const stat = lstatSync(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Unsafe store directory: ${dir}`);
   chmodSync(dir, 0o700);
+}
+
+export function loadAllProjects(baseDir = DEFAULT_STORE_DIR) {
+  const dir = path.join(baseDir, "projects");
+  if (!existsSync(dir)) return [];
+  ensurePrivateDir(baseDir);
+  ensurePrivateDir(dir);
+
+  return readdirSync(dir)
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => {
+      try {
+        const fullPath = path.join(dir, file);
+        if (!lstatSync(fullPath).isFile()) return null;
+        chmodSync(fullPath, 0o600);
+        const raw = JSON.parse(readFileSync(fullPath, "utf8"));
+        return raw?.projectRoot ? normalizeProject(raw, raw.projectRoot, { skipContextFiles: true }) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.projectRoot.localeCompare(b.projectRoot));
 }
 
 export function saveProject(project, baseDir = DEFAULT_STORE_DIR) {
@@ -247,6 +273,18 @@ export function renderList(project) {
       return `${index + 1}. #${item.id} ${item.text}${reason}`;
     })
     .join("\n");
+}
+
+export function renderAllProjects(projects) {
+  const active = projects.filter((project) => project.items.length);
+  if (!active.length) return "Keine offenen Inbox-Einträge in gespeicherten Projekten.";
+
+  return active
+    .map((project) => {
+      const title = path.basename(project.projectRoot) || project.projectRoot;
+      return [`${title} — ${project.projectRoot}`, renderList(project)].join("\n");
+    })
+    .join("\n\n");
 }
 
 export function toProjectRelative(projectRoot, candidate) {
@@ -508,6 +546,12 @@ export async function handleTodoCommand(args, ctx, pi, options = {}) {
   const baseDir = options.baseDir || DEFAULT_STORE_DIR;
   const cwd = options.cwd || ctx?.cwd || process.cwd();
   const command = parseTodoCommand(args);
+
+  if (command.type === "all") {
+    const project = emptyProject(findProjectRoot(cwd));
+    return { ok: true, command, project, message: emit(ctx, renderAllProjects(loadAllProjects(baseDir))) };
+  }
+
   const project = loadProject(cwd, baseDir);
 
   if (command.type === "invalid") {
@@ -572,7 +616,7 @@ export default function piTodoExtension(pi) {
   pi.registerCommand("todo", {
     description: "Pi Desk: project-scoped priority workspace",
     getArgumentCompletions: (prefix) => {
-      const commands = ["sort", "setup", "clear", "done ", "move "];
+      const commands = ["all", "sort", "setup", "clear", "done ", "move "];
       const filtered = commands.filter((command) => command.startsWith(prefix));
       return filtered.length ? filtered.map((command) => ({ value: command, label: command.trim() || command })) : null;
     },

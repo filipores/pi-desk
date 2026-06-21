@@ -18,6 +18,7 @@ pi install git:github.com/filipores/pi-desk
 
 ```text
 /todo                 show the ranked inbox
+/todo all             show open inbox entries from every stored project
 /todo <text>          add an inbox entry and prioritize
 /todo sort            reprioritize
 /todo done <id>       delete an entry

@@ -40,6 +40,7 @@ Offene Einträge sind die Quelle der Wahrheit. Erledigte Einträge werden hart g
 ## Commands
 
 - `/todo` — gespeicherte Rangliste anzeigen, kein Agent
+- `/todo all` — offene Inbox-Einträge aus allen gespeicherten Projekten anzeigen, kein Agent
 - `/todo <text>` — Inbox-Eintrag erfassen, bei erstem Projektlauf Setup starten, dann automatisch priorisieren
 - `/todo sort` — manuell neu priorisieren
 - `/todo done <id>` — Eintrag hart löschen
