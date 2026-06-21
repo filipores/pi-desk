@@ -1,4 +1,4 @@
-# Pi Todo
+# Pi Desk
 
 Dieses Glossar beschreibt die projektbezogene Arbeitspriorisierung, damit Erfassung und Priorisierung dieselbe Sprache verwenden.
 

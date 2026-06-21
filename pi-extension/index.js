@@ -13,7 +13,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-export const DEFAULT_STORE_DIR = path.join(homedir(), ".pi", "agent", "pi-todo");
+export const DEFAULT_STORE_DIR = path.join(homedir(), ".pi", "agent", "pi-desk");
 export const MAX_CONTEXT_BYTES = 100_000;
 
 const IGNORE_DIRS = new Set([
@@ -445,7 +445,7 @@ async function setupContext(ctx, project) {
 
   if (ctx?.hasUI) {
     const summary = suggestions.length ? suggestions.join("\n") : "Keine sicheren Kontextdateien gefunden.";
-    const choice = await ctx.ui.select?.("pi-todo Kontext", ["Vorschläge nutzen", "Keine Kontextdateien", "Auswahl bearbeiten"]);
+    const choice = await ctx.ui.select?.("Pi Desk context", ["Vorschläge nutzen", "Keine Kontextdateien", "Auswahl bearbeiten"]);
 
     if (choice === "Keine Kontextdateien" || !choice) {
       selected = [];
@@ -513,7 +513,7 @@ export async function handleTodoCommand(args, ctx, pi, options = {}) {
   }
 
   if (command.type === "clear") {
-    const confirmed = ctx?.hasUI && (await ctx.ui?.confirm?.("pi-todo clear", "Alle offenen Inbox-Einträge hart löschen?"));
+    const confirmed = ctx?.hasUI && (await ctx.ui?.confirm?.("Pi Desk clear", "Alle offenen Inbox-Einträge hart löschen?"));
     if (!confirmed) return { ok: false, command, project, message: emit(ctx, "Clear abgebrochen.", "warning") };
     const count = clearItems(project);
     saveProject(project, baseDir);
@@ -555,7 +555,7 @@ export async function handleTodoCommand(args, ctx, pi, options = {}) {
 
 export default function piTodoExtension(pi) {
   pi.registerCommand("todo", {
-    description: "Projektbezogene priorisierte Inbox-Rangliste",
+    description: "Pi Desk: project-scoped priority workspace",
     getArgumentCompletions: (prefix) => {
       const commands = ["sort", "setup", "clear", "done ", "move "];
       const filtered = commands.filter((command) => command.startsWith(prefix));
@@ -563,7 +563,7 @@ export default function piTodoExtension(pi) {
     },
     handler: async (args, ctx) => {
       const result = await handleTodoCommand(args, ctx, pi);
-      pi.sendMessage?.({ customType: "pi-todo", content: result.message, display: true, details: { ok: result.ok } });
+      pi.sendMessage?.({ customType: "pi-desk", content: result.message, display: true, details: { ok: result.ok } });
     },
   });
 }

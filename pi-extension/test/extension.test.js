@@ -19,16 +19,16 @@ import piTodoExtension, {
 } from "../index.js";
 
 function tempDir(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), "pi-todo-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "pi-desk-"));
   t?.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
 
 test("package registers the pi extension", () => {
   const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
-  assert.equal(pkg.name, "pi-todo");
+  assert.equal(pkg.name, "pi-desk");
   assert.ok(pkg.keywords.includes("pi-package"));
-  assert.ok(pkg.keywords.includes("todo"));
+  assert.ok(pkg.keywords.includes("workspace"));
   assert.deepEqual(pkg.pi.extensions, ["./pi-extension/index.js"]);
 
   const registered = [];

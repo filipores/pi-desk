@@ -1,15 +1,15 @@
-# pi-todo MVP Plan
+# Pi Desk MVP Plan
 
 ## Ziel
 
-Ein generisches Pi-Paket, das pro Projekt eine persönliche, priorisierte To-do-Rangliste führt.
+Ein generisches Pi-Paket, das pro Projekt einen kleinen priorisierten Workspace für Inbox-Einträge führt.
 
 ## Paketform
 
 Wie `sheepdog`/`slop`:
 
 ```text
-pi-todo/
+pi-desk/
 ├── package.json
 ├── pi-extension/
 │   ├── index.js
@@ -21,15 +21,15 @@ pi-todo/
 
 Root-`package.json`:
 
-- `name`: `pi-todo`
-- `keywords`: `pi-package`, `pi`, `todo`, `prioritization`
+- `name`: `pi-desk`
+- `keywords`: `pi-package`, `pi`, `workspace`, `inbox`, `prioritization`
 - `pi.extensions`: `./pi-extension/index.js`
 
 Kein Web, keine App, kein Sync, keine DB.
 
 ## Speicher
 
-Global privat unter `~/.pi/agent/pi-todo/`.
+Global privat unter `~/.pi/agent/pi-desk/`.
 
 - Projekt-ID: Git-Root; außerhalb von Git fallback auf `cwd`
 - Pro Projekt getrennte JSON-Datei: `projects/<hash>.json`

@@ -1,16 +1,19 @@
 {
-  "name": "pi-todo",
+  "name": "pi-desk",
   "version": "0.1.0",
-  "description": "Project-scoped personal prioritized inbox list for pi.",
+  "description": "Your package workspace: inboxes, priorities, and next steps for Pi packages.",
   "repository": "github:filipores/pi-todo",
   "keywords": [
     "pi-package",
     "pi",
-    "todo",
-    "prioritization"
+    "workspace",
+    "inbox",
+    "prioritization",
+    "priority"
   ],
   "license": "MIT",
   "files": [
+    "assets/pi-desk-imagegen-notionish.png",
     "CONTEXT.md",
     "LICENSE",
     "PLAN.md",
