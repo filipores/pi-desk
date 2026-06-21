@@ -6,7 +6,7 @@ Ein generisches Pi-Paket, das pro Projekt einen kleinen priorisierten Workspace 
 
 ## Paketform
 
-Wie `sheepdog`/`slop`:
+Wie `sheepdog`/`slop`. Der Baum zeigt die Repository-/Quellstruktur, nicht den npm-Tarball:
 
 ```text
 pi-desk/
@@ -51,31 +51,30 @@ Offene Einträge sind die Quelle der Wahrheit. Erledigte Einträge werden hart g
 
 Beim ersten `/todo <text>` in einem Projekt:
 
-1. Setup-Agent sucht nach Kontextdateien.
-2. Tools: lesen + bash, keine mutierenden Tools.
-3. Ziel: Docs/Root-Dateien, max. 5 Vorschläge.
-4. User bestätigt oder ändert die Auswahl.
-5. Auswahl wird pro Projekt gespeichert.
+1. Extension sucht sichere Kontextdateien.
+2. Ziel: Docs/Root-Dateien, max. 5 Vorschläge.
+3. User bestätigt oder ändert die Auswahl.
+4. Auswahl wird pro Projekt gespeichert.
 
-Setup-Agent darf vorschlagen, keinen Kontext zu verwenden.
+Die Auswahl darf leer bleiben.
 
 ## Priorisierung
 
 Nach jedem neuen Eintrag und bei `/todo sort`:
 
-1. Extension liest To-dos und bestätigte Kontextdateien.
+1. Extension liest Inbox-Einträge, bestätigte Kontextdateien und aktuellen geladenen Pi-Kontext.
 2. Priorisierungs-Agent bekommt keine Tools.
-3. Agent fragt das Priorisierungskriterium jedes Mal ab.
-4. Bei Unklarheit stellt er Klärungsfragen einzeln, bis die Rangliste belastbar ist.
-5. Ergebnis ist eine lineare Rangliste, keine Buckets, keine Scores.
-6. Anzeige: Rang + Text + kurzer Grund.
-7. Gründe und Fragen folgen der Sprache der Eingabe.
+3. Agent priorisiert automatisch aus Projektkontext, Nutzerzielen und Inbox-Texten; keine Rückfragen.
+4. Ergebnis ist eine lineare Rangliste, keine Buckets, keine Scores.
+5. Anzeige: Rang + Text + kurzer Grund.
+6. Gründe folgen der Sprache der Eingabe.
+7. Bei Agent-Ausfall bleibt die bestehende Reihenfolge ohne Fake-Gründe erhalten.
 
 ## Sicherheitsgrenzen
 
 - Nie `.env`, Credentials, `node_modules`, `.git`, Build-Artefakte oder große Binärdateien als Kontext lesen/vorschlagen.
 - Priorisierungs-Agent hat keine Tools.
-- Nur Setup-Agent darf suchen; mutierende Tools bleiben aus.
+- Kontextsuche läuft lokal in der Extension; keine mutierenden Tools.
 - `clear` braucht Bestätigung.
 
 ## Tests
@@ -87,9 +86,6 @@ Minimal:
 - JSON-Store: add/list/done/move/clear
 - Kontextfilter: Secrets/ignored dirs ausgeschlossen
 
-## Offene Implementierungsentscheidung
+## Implementierungsentscheidung
 
-Wie der Agent technisch gespawnt wird:
-
-- bevorzugt: Pi-Subprozess im JSON/print-Modus mit strengem Prompt und strukturiertem Output
-- fallback: einfache interne Promptfunktion, falls Subprozess-API zu viel wird
+Der Priorisierungs-Agent läuft als Pi-Subprozess ohne Tools und antwortet mit JSON.

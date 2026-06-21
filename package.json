@@ -13,7 +13,6 @@
   ],
   "license": "MIT",
   "files": [
-    "assets/pi-desk-imagegen-notionish.png",
     "LICENSE",
     "README.md",
     "pi-extension/index.js",

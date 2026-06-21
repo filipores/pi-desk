@@ -1,19 +1,6 @@
-<p align="center">
-  <img src="assets/pi-desk-imagegen-notionish.png" width="640" alt="Pi Desk">
-</p>
+# Pi Desk
 
-<h1 align="center">Pi Desk</h1>
-
-<p align="center">
-  <em>Your package workspace. Inboxes, priorities, and next steps.</em>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-111111?style=flat-square" alt="Version 0.1.0">
-  <img src="https://img.shields.io/badge/license-MIT-111111?style=flat-square" alt="MIT license">
-</p>
-
----
+Your package workspace: inboxes, priorities, and next steps.
 
 Pi Desk is a tiny workspace for one Pi package. Drop work into the inbox,
 let it rank what matters first, and keep the next step visible without turning

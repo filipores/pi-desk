@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,6 +14,7 @@ import piTodoExtension, {
   loadProject,
   moveItem,
   parseTodoCommand,
+  projectFileFor,
   saveProject,
   suggestContextFiles,
 } from "../index.js";
@@ -60,7 +61,7 @@ test("finds git root and falls back to cwd", (t) => {
   assert.equal(findProjectRoot(path.join(noGit, "sub")), path.join(noGit, "sub"));
 });
 
-test("stores add list done move clear as project JSON", (t) => {
+test("stores add list done move clear as private project JSON", (t) => {
   const root = tempDir(t);
   const store = tempDir(t);
   mkdirSync(path.join(root, ".git"));
@@ -78,13 +79,52 @@ test("stores add list done move clear as project JSON", (t) => {
   assert.equal(doneItem(project, 1), true);
   assert.deepEqual(project.items.map((item) => item.id), [2, 3]);
 
-  saveProject(project, store);
+  const file = saveProject(project, store);
+  assert.equal(statSync(store).mode & 0o077, 0);
+  assert.equal(statSync(path.dirname(file)).mode & 0o077, 0);
+  assert.equal(statSync(file).mode & 0o077, 0);
+
+  chmodSync(store, 0o755);
+  chmodSync(path.dirname(file), 0o755);
+  chmodSync(file, 0o644);
   const loaded = loadProject(root, store);
+  assert.equal(statSync(store).mode & 0o077, 0);
+  assert.equal(statSync(path.dirname(file)).mode & 0o077, 0);
+  assert.equal(statSync(file).mode & 0o077, 0);
   assert.deepEqual(loaded.items.map((item) => item.id), [2, 3]);
   assert.equal(loaded.nextId, 4);
 
   assert.equal(clearItems(loaded), 2);
   assert.equal(loaded.items.length, 0);
+});
+
+test("load ignores symlinked project JSON", (t) => {
+  const root = tempDir(t);
+  const store = tempDir(t);
+  const target = path.join(tempDir(t), "target.json");
+  writeFileSync(target, JSON.stringify({ projectRoot: root, items: [{ id: 1, text: "stolen" }] }));
+  chmodSync(target, 0o644);
+
+  const file = projectFileFor(root, store);
+  mkdirSync(path.dirname(file), { recursive: true });
+  symlinkSync(target, file);
+
+  const loaded = loadProject(root, store);
+  assert.deepEqual(loaded.items, []);
+  assert.equal(statSync(target).mode & 0o777, 0o644);
+});
+
+test("save refuses symlinked projects directory", (t) => {
+  const root = tempDir(t);
+  const store = tempDir(t);
+  const target = tempDir(t);
+  symlinkSync(target, path.join(store, "projects"));
+
+  const project = loadProject(root, store);
+  addItem(project, "do not leak");
+
+  assert.throws(() => saveProject(project, store), /Unsafe store directory/);
+  assert.deepEqual(readdirSync(target), []);
 });
 
 test("item changes clear stale ranking reasons", () => {
@@ -184,6 +224,7 @@ test("filters unsafe context and suggests root/docs files", (t) => {
 test("sort prioritizes automatically with loaded Pi context", async (t) => {
   const root = tempDir(t);
   const store = tempDir(t);
+  writeFileSync(path.join(root, "CONTEXT.md"), "safe context file");
   let prompt = "";
   const pi = {
     exec: async (_command, args) => {
@@ -205,6 +246,69 @@ test("sort prioritizes automatically with loaded Pi context", async (t) => {
   assert.deepEqual(result.project.items.map((item) => item.id), [2, 1]);
   assert.match(prompt, /Loaded project context/);
   assert.doesNotMatch(prompt, /Priorisierungskriterium/);
+});
+
+test("sort ignores unsafe loaded Pi context files", async (t) => {
+  const root = tempDir(t);
+  const store = tempDir(t);
+  mkdirSync(path.join(root, "docs"));
+  writeFileSync(path.join(root, ".env"), "LINKED=secret");
+  writeFileSync(path.join(root, "README.md"), "clean readme");
+  writeFileSync(path.join(root, "CONTEXT.md"), "safe context file");
+  writeFileSync(path.join(root, "ALT.md"), "clean alt");
+  symlinkSync(path.join(root, ".env"), path.join(root, "docs", "linked.md"));
+  let prompt = "";
+  const pi = {
+    exec: async (_command, args) => {
+      prompt = args.at(-1);
+      return { code: 0, stdout: '{"items":[{"id":2},{"id":1}]}' };
+    },
+  };
+  const ctx = {
+    cwd: root,
+    hasUI: false,
+    ui: { notify: () => {} },
+    getSystemPromptOptions: () => ({
+      contextFiles: [
+        { path: ".env", content: "FOO=bar" },
+        { path: "README.md", content: "api_key=secret" },
+        { path: "docs/linked.md", content: "LINKED=secret" },
+        { path: "ALT.md", text: "ALT via text", contents: "ALT via contents" },
+        { path: "CONTEXT.md", content: "safe context" },
+      ],
+    }),
+  };
+
+  await handleTodoCommand("first", ctx, pi, { baseDir: store });
+  await handleTodoCommand("second", ctx, pi, { baseDir: store });
+
+  assert.doesNotMatch(prompt, /FOO=bar/);
+  assert.doesNotMatch(prompt, /api_key=secret/);
+  assert.doesNotMatch(prompt, /LINKED=secret/);
+  assert.doesNotMatch(prompt, /ALT via/);
+  assert.match(prompt, /safe context/);
+});
+
+test("sort failure keeps order when loaded Pi context throws", async (t) => {
+  const root = tempDir(t);
+  const store = tempDir(t);
+  const messages = [];
+  const ctx = {
+    cwd: root,
+    hasUI: false,
+    ui: { notify: (message) => messages.push(message) },
+    getSystemPromptOptions: () => {
+      throw new Error("boom");
+    },
+  };
+
+  await handleTodoCommand("first", ctx, {}, { baseDir: store });
+  const result = await handleTodoCommand("second", ctx, {}, { baseDir: store });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(loadProject(root, store).items.map((item) => item.text), ["first", "second"]);
+  assert.deepEqual(result.project.items.map((item) => item.reason), ["", ""]);
+  assert.ok(messages.some((message) => /Priorisierung-Agent nicht verfügbar/.test(message)));
 });
 
 test("sort failure keeps order without fake reasons", async (t) => {

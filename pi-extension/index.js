@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -52,8 +53,6 @@ export function parseTodoCommand(args = "") {
 
   return { type: "add", text };
 }
-
-export const parseTodoArgs = parseTodoCommand;
 
 export function findProjectRoot(cwd = process.cwd()) {
   let dir = path.resolve(cwd);
@@ -121,15 +120,30 @@ export function loadProject(cwd = process.cwd(), baseDir = DEFAULT_STORE_DIR) {
   const projectRoot = findProjectRoot(cwd);
   const file = projectFileFor(projectRoot, baseDir);
   if (!existsSync(file)) return emptyProject(projectRoot);
+  ensurePrivateDir(baseDir);
+  ensurePrivateDir(path.dirname(file));
+  if (!lstatSync(file).isFile()) return emptyProject(projectRoot);
+  chmodSync(file, 0o600);
   return normalizeProject(JSON.parse(readFileSync(file, "utf8")), projectRoot);
 }
 
+function ensurePrivateDir(dir) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Unsafe store directory: ${dir}`);
+  chmodSync(dir, 0o700);
+}
+
 export function saveProject(project, baseDir = DEFAULT_STORE_DIR) {
-  const file = path.join(baseDir, "projects", `${project.id}.json`);
-  mkdirSync(path.dirname(file), { recursive: true });
+  const dir = path.join(baseDir, "projects");
+  ensurePrivateDir(baseDir);
+  ensurePrivateDir(dir);
+  const file = path.join(dir, `${project.id}.json`);
   const tmp = `${file}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(project, null, 2)}\n`);
+  writeFileSync(tmp, `${JSON.stringify(project, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
   renameSync(tmp, file);
+  chmodSync(file, 0o600);
   return file;
 }
 
@@ -359,7 +373,7 @@ export function readContextFiles(project) {
   return result;
 }
 
-function loadedContextFiles(ctx, usedChars = 0) {
+function loadedContextFiles(ctx, projectRoot, usedChars = 0) {
   const options = ctx?.getSystemPromptOptions?.();
   const files = Array.isArray(options?.contextFiles) ? options.contextFiles : [];
   const result = [];
@@ -367,11 +381,13 @@ function loadedContextFiles(ctx, usedChars = 0) {
 
   for (const file of files) {
     if (remaining <= 0) break;
-    const text = [file?.content, file?.text, file?.contents].find((value) => typeof value === "string");
-    if (!text || SECRET_CONTENT.test(text)) continue;
+    const relative = toProjectRelative(projectRoot, file?.path);
+    const text = file?.content;
+    if (!relative || !isSafeContextFile(projectRoot, relative)) continue;
+    if (typeof text !== "string" || !text || text.includes("\0") || SECRET_CONTENT.test(text)) continue;
     const clipped = text.slice(0, Math.min(CONTEXT_CHARS_PER_FILE, remaining));
     remaining -= clipped.length;
-    result.push({ path: file?.path || "Pi context", text: clipped });
+    result.push({ path: relative, text: clipped });
   }
 
   return result;
@@ -381,7 +397,7 @@ function collectContextFiles(ctx, project) {
   const selected = readContextFiles(project);
   const used = selected.reduce((sum, file) => sum + file.text.length, 0);
   const seen = new Set(selected.map((file) => file.path));
-  const loaded = loadedContextFiles(ctx, used).filter((file) => {
+  const loaded = loadedContextFiles(ctx, project.projectRoot, used).filter((file) => {
     if (seen.has(file.path)) return false;
     seen.add(file.path);
     return true;
@@ -472,10 +488,9 @@ async function prioritizeProject(pi, ctx, project) {
     return true;
   }
 
-  const contextFiles = collectContextFiles(ctx, project);
-
   let parsed;
   try {
+    const contextFiles = collectContextFiles(ctx, project);
     const output = await runPiNoTools(pi, buildPrioritizationPrompt(project, contextFiles), ctx);
     parsed = parseAgentJson(output);
   } catch {
