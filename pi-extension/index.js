@@ -180,7 +180,6 @@ function clearReasons(project) {
 export function addItem(project, text) {
   const clean = String(text ?? "").trim();
   if (!clean) return undefined;
-  clearReasons(project);
   const item = { id: project.nextId, text: clean, reason: "" };
   project.nextId += 1;
   project.items.push(item);
@@ -443,29 +442,15 @@ function collectContextFiles(ctx, project) {
   return [...selected, ...loaded];
 }
 
-export function parseAgentJson(output) {
-  const text = String(output ?? "").trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) return JSON.parse(fenced[1]);
-  try {
-    return JSON.parse(text);
-  } catch {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start === -1 || end <= start) throw new Error("Agent did not return JSON");
-    return JSON.parse(text.slice(start, end + 1));
-  }
-}
-
-function buildPrioritizationPrompt(project, contextFiles) {
+function buildSortAgentPrompt(project, contextFiles) {
   const inbox = project.items.map((item) => ({
     id: item.id,
     text: item.text,
     manualRank: Number.isInteger(item.manualRank) ? item.manualRank : null,
   }));
-  const context = contextFiles.map((file) => `# ${file.path}\n${file.text}`).join("\n\n---\n\n") || "(kein Kontext ausgewählt)";
+  const context = contextFiles.map((file) => `# ${file.path}\n${file.text}`).join("\n\n---\n\n") || "(kein gespeicherter Kontext)";
 
-  return `Du priorisierst eine persönliche Projekt-Inbox.\n\nRegeln:\n- Erzeuge immer eine lineare Rangliste aller offenen Inbox-Einträge, keine Buckets, keine Scores.\n- Stelle keine Rückfragen. Triff die beste Entscheidung aus Projektkontext, Nutzerzielen und Inbox-Texten.\n- Respektiere manualRank exakt, wenn gesetzt.\n- Default-Kriterium: größter nächster Nutzen für das Projekt, bei ähnlichem Nutzen zuerst Risiko/Blocker und danach kleine schnell shipbare Schritte.\n- Gründe sind kurz und in der Sprache der Inbox-Einträge.\n- Antworte nur mit {"items":[{"id":1,"reason":"kurzer Grund"}]}.\n\nKontext:\n${context}\n\nInbox:\n${JSON.stringify(inbox, null, 2)}`;
+  return `Sortiere die Pi-Desk-Inbox für ${project.projectRoot}.\n\nArbeite read-only. Nutze piDeskContext, wenn du weiteren sicheren Projektkontext listen oder lesen musst.\nWenn nach der Kontextsicht fachliche Fragen offen bleiben, nutze askUserQuestions mit kurzen offenen Fragen.\nWenn du genug weißt, rufe piDeskApplySort genau einmal mit allen offenen IDs in finaler Reihenfolge auf.\nRespektiere manualRank exakt. Gründe kurz in der Sprache der Inbox-Einträge.\n\nBekannter Kontext:\n${context}\n\nInbox:\n${JSON.stringify(inbox, null, 2)}`;
 }
 
 function emit(ctx, text, level = "info") {
@@ -473,24 +458,32 @@ function emit(ctx, text, level = "info") {
   return text;
 }
 
-async function runPiNoTools(pi, prompt, ctx) {
-  if (!pi?.exec) throw new Error("pi.exec unavailable");
-  const result = await pi.exec(
-    "pi",
-    [
-      "-p",
-      "--no-tools",
-      "--no-extensions",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-context-files",
-      "--no-session",
-      prompt,
-    ],
-    { signal: ctx?.signal, timeout: 120_000 },
-  );
-  if (result?.code) throw new Error(result.stderr || result.stdout || `pi exited ${result.code}`);
-  return result?.stdout ?? result?.output ?? "";
+async function startSortAgent(pi, ctx, project) {
+  if (!pi?.sendUserMessage || !pi?.prepareSortTools) {
+    emit(ctx, "Sort-Agent nicht verfügbar; bestehende Reihenfolge beibehalten.", "warning");
+    return false;
+  }
+
+  let contextFiles = [];
+  try {
+    contextFiles = collectContextFiles(ctx, project);
+  } catch {
+    contextFiles = readContextFiles(project);
+  }
+
+  let restoreSortTools;
+  try {
+    restoreSortTools = pi.prepareSortTools();
+    if (!restoreSortTools) throw new Error("sort tool allowlist unavailable");
+    const prompt = buildSortAgentPrompt(project, contextFiles);
+    if (ctx?.isIdle?.() === false) pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    else pi.sendUserMessage(prompt);
+    return true;
+  } catch {
+    restoreSortTools?.();
+    emit(ctx, "Sort-Agent nicht verfügbar; bestehende Reihenfolge beibehalten.", "warning");
+    return false;
+  }
 }
 
 async function setupContext(ctx, project) {
@@ -519,28 +512,44 @@ async function setupContext(ctx, project) {
   return project.contextFiles;
 }
 
-async function prioritizeProject(pi, ctx, project) {
-  if (project.items.length === 0) return true;
-  if (project.items.length === 1) {
-    project.items[0].reason = "";
-    return true;
-  }
+const CONTEXT_TOOL_PARAMETERS = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["list", "read"] },
+    path: { type: "string" },
+  },
+  required: ["action"],
+  additionalProperties: false,
+};
 
-  let parsed;
-  try {
-    const contextFiles = collectContextFiles(ctx, project);
-    const output = await runPiNoTools(pi, buildPrioritizationPrompt(project, contextFiles), ctx);
-    parsed = parseAgentJson(output);
-  } catch {
-    emit(ctx, "Priorisierung-Agent nicht verfügbar; bestehende Reihenfolge beibehalten.", "warning");
-    return false;
-  }
+const ASK_USER_QUESTIONS_PARAMETERS = {
+  type: "object",
+  properties: {
+    questions: { type: "array", minItems: 1, maxItems: 4, items: { type: "string" } },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+};
 
-  if (applyRanking(project, parsed?.items)) return true;
-
-  emit(ctx, "Priorisierung unklar; bestehende Reihenfolge beibehalten.", "warning");
-  return false;
-}
+const APPLY_SORT_PARAMETERS = {
+  type: "object",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          reason: { type: "string" },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["items"],
+  additionalProperties: false,
+};
 
 export async function handleTodoCommand(args, ctx, pi, options = {}) {
   const baseDir = options.baseDir || DEFAULT_STORE_DIR;
@@ -601,18 +610,98 @@ export async function handleTodoCommand(args, ctx, pi, options = {}) {
     };
   }
 
-  if (command.type === "add" || command.type === "sort") {
-    if (command.type === "add") addItem(project, command.text);
-    if (!project.setupComplete) await setupContext(ctx, project);
-    const prioritized = await prioritizeProject(pi, ctx, project);
+  if (command.type === "add") {
+    addItem(project, command.text);
     saveProject(project, baseDir);
-    return { ok: command.type === "add" || prioritized, command, project, message: emit(ctx, renderList(project)) };
+    return { ok: true, command, project, message: emit(ctx, renderList(project)) };
+  }
+
+  if (command.type === "sort") {
+    if (project.items.length < 2) return { ok: true, command, project, message: emit(ctx, renderList(project)) };
+    const started = await startSortAgent(pi, ctx, project);
+    return { ok: started, command, project, message: emit(ctx, started ? "Sort-Agent gestartet." : renderList(project), started ? "info" : "warning") };
   }
 
   return { ok: false, command, project, message: emit(ctx, "Unbekannter /todo Befehl.", "error") };
 }
 
 export default function piTodoExtension(pi) {
+  let restoreTools;
+  const restoreSortTools = () => {
+    if (!restoreTools) return;
+    pi.setActiveTools?.(restoreTools);
+    restoreTools = undefined;
+  };
+  pi.on?.("agent_end", restoreSortTools);
+
+  pi.registerTool?.({
+    name: "piDeskContext",
+    label: "Pi Desk Context",
+    description: "List or read safe project context files for Pi Desk sorting.",
+    promptSnippet: "List/read only files that pass Pi Desk's context safety filter.",
+    parameters: CONTEXT_TOOL_PARAMETERS,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const project = loadProject(ctx?.cwd || process.cwd());
+      if (params?.action === "list") {
+        const files = [...new Set([...project.contextFiles, ...suggestContextFiles(project.projectRoot, 10)])]
+          .filter((file) => isSafeContextFile(project.projectRoot, file));
+        return {
+          content: [{ type: "text", text: files.length ? files.join("\n") : "Keine sicheren Kontextdateien gefunden." }],
+          details: { files },
+        };
+      }
+
+      const relative = toProjectRelative(project.projectRoot, params?.path);
+      if (params?.action !== "read" || !relative || !isSafeContextFile(project.projectRoot, relative)) {
+        return { content: [{ type: "text", text: "Kontextdatei nicht erlaubt oder nicht gefunden." }], details: { ok: false } };
+      }
+
+      const text = readFileSync(path.join(project.projectRoot, relative), "utf8").slice(0, CONTEXT_CHARS_PER_FILE);
+      return { content: [{ type: "text", text: `# ${relative}\n${text}` }], details: { ok: true, path: relative } };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "askUserQuestions",
+    label: "Ask User Questions",
+    description: "Ask the user open questions needed to sort the Pi Desk inbox.",
+    promptSnippet: "Ask concise open questions when Pi Desk sorting lacks enough context.",
+    parameters: ASK_USER_QUESTIONS_PARAMETERS,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const questions = (Array.isArray(params?.questions) ? params.questions : [])
+        .map((question) => String(question ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      if (!questions.length) return { content: [{ type: "text", text: "Keine Fragen angegeben." }], details: { questions, answers: "" } };
+
+      if (!ctx?.hasUI && ctx?.mode !== "tui") {
+        return { content: [{ type: "text", text: `UI nicht verfügbar. Offene Fragen:\n${questions.join("\n")}` }], details: { questions, answers: "" } };
+      }
+
+      const prompt = questions.map((question, index) => `${index + 1}. ${question}\nA:`).join("\n\n");
+      const answers = ctx.ui?.editor
+        ? await ctx.ui.editor("Pi Desk Sort Fragen", prompt)
+        : await ctx.ui?.input?.("Pi Desk Sort Frage", questions.join("\n"));
+      const text = String(answers ?? "").trim();
+      return { content: [{ type: "text", text: text ? `Antworten:\n${text}` : "Keine Antwort gegeben." }], details: { questions, answers: text } };
+    },
+  });
+
+  pi.registerTool?.({
+    name: "piDeskApplySort",
+    label: "Apply Pi Desk Sort",
+    description: "Persist the final sorted Pi Desk inbox order.",
+    parameters: APPLY_SORT_PARAMETERS,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const project = loadProject(ctx?.cwd || process.cwd());
+      const ok = applyRanking(project, params?.items);
+      if (ok) saveProject(project);
+      const text = ok ? renderList(project) : "Sortierung abgelehnt: IDs fehlen oder sind doppelt.";
+      ctx?.ui?.notify?.(text, ok ? "info" : "warning");
+      return { content: [{ type: "text", text }], details: { ok, projectId: project.id } };
+    },
+  });
+
   pi.registerCommand("todo", {
     description: "Pi Desk: project-scoped priority workspace",
     getArgumentCompletions: (prefix) => {
@@ -621,7 +710,18 @@ export default function piTodoExtension(pi) {
       return filtered.length ? filtered.map((command) => ({ value: command, label: command.trim() || command })) : null;
     },
     handler: async (args, ctx) => {
-      const result = await handleTodoCommand(args, ctx, pi);
+      const result = await handleTodoCommand(args, ctx, {
+        sendUserMessage: (...params) => pi.sendUserMessage(...params),
+        prepareSortTools: () => {
+          if (!pi.getActiveTools || !pi.setActiveTools) return undefined;
+          restoreTools ||= pi.getActiveTools();
+          const available = new Set((pi.getAllTools?.() || []).map((tool) => tool.name));
+          const tools = ["piDeskContext", "askUserQuestions", "piDeskApplySort"]
+            .filter((name) => !available.size || available.has(name));
+          pi.setActiveTools(tools);
+          return restoreSortTools;
+        },
+      });
       pi.sendMessage?.({ customType: "pi-desk", content: result.message, display: true, details: { ok: result.ok } });
     },
   });

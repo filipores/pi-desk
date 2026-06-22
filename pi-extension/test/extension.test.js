@@ -34,9 +34,14 @@ test("package registers the pi extension", () => {
   assert.deepEqual(pkg.pi.extensions, ["./pi-extension/index.js"]);
 
   const registered = [];
-  piTodoExtension({ registerCommand: (name, options) => registered.push({ name, options }) });
+  const tools = [];
+  piTodoExtension({
+    registerCommand: (name, options) => registered.push({ name, options }),
+    registerTool: (tool) => tools.push(tool),
+  });
   assert.equal(registered[0].name, "todo");
   assert.equal(typeof registered[0].options.handler, "function");
+  assert.deepEqual(tools.map((tool) => tool.name), ["piDeskContext", "askUserQuestions", "piDeskApplySort"]);
 });
 
 test("parses todo commands", () => {
@@ -164,14 +169,14 @@ test("save refuses symlinked projects directory", (t) => {
   assert.deepEqual(readdirSync(target), []);
 });
 
-test("item changes clear stale ranking reasons", () => {
+test("add appends; done and move clear stale ranking reasons", () => {
   const project = { items: [], nextId: 1 };
   addItem(project, "first");
   addItem(project, "second");
   project.items.forEach((item) => { item.reason = "old"; });
 
   addItem(project, "third");
-  assert.deepEqual(project.items.map((item) => item.reason), ["", "", ""]);
+  assert.deepEqual(project.items.map((item) => item.reason), ["old", "old", ""]);
 
   project.items.forEach((item) => { item.reason = "old"; });
   doneItem(project, 3);
@@ -258,31 +263,67 @@ test("filters unsafe context and suggests root/docs files", (t) => {
   assert.deepEqual(suggestContextFiles(root), ["CONTEXT.md", "README.md", "docs/usage.md"]);
 });
 
-test("sort prioritizes automatically with loaded Pi context", async (t) => {
+test("add appends without starting agent", async (t) => {
   const root = tempDir(t);
   const store = tempDir(t);
-  writeFileSync(path.join(root, "CONTEXT.md"), "safe context file");
-  let prompt = "";
-  const pi = {
-    exec: async (_command, args) => {
-      prompt = args.at(-1);
-      return { code: 0, stdout: '{"items":[{"id":2,"reason":"blocks work"},{"id":1,"reason":"later"}]}' };
-    },
-  };
-  const ctx = {
-    cwd: root,
-    hasUI: false,
-    ui: { notify: () => {} },
-    getSystemPromptOptions: () => ({ contextFiles: [{ path: "CONTEXT.md", content: "Loaded project context" }] }),
-  };
+  const pi = { sendUserMessage: () => { throw new Error("agent should not start"); } };
+  const ctx = { cwd: root, hasUI: false, ui: { notify: () => {} } };
 
   await handleTodoCommand("nice to have", ctx, pi, { baseDir: store });
   const result = await handleTodoCommand("blocking bug", ctx, pi, { baseDir: store });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.project.items.map((item) => item.id), [2, 1]);
+  assert.deepEqual(result.project.items.map((item) => item.text), ["nice to have", "blocking bug"]);
+  assert.deepEqual(loadProject(root, store).items.map((item) => item.text), ["nice to have", "blocking bug"]);
+});
+
+test("sort starts agent with loaded Pi context", async (t) => {
+  const root = tempDir(t);
+  const store = tempDir(t);
+  writeFileSync(path.join(root, "CONTEXT.md"), "safe context file");
+  let prompt = "";
+  const pi = { sendUserMessage: (message) => { prompt = message; }, prepareSortTools: () => () => {} };
+  const ctx = {
+    cwd: root,
+    hasUI: false,
+    isIdle: () => true,
+    ui: { notify: () => {} },
+    getSystemPromptOptions: () => ({ contextFiles: [{ path: "CONTEXT.md", content: "Loaded project context" }] }),
+  };
+
+  await handleTodoCommand("nice to have", ctx, pi, { baseDir: store });
+  await handleTodoCommand("blocking bug", ctx, pi, { baseDir: store });
+  const result = await handleTodoCommand("sort", ctx, pi, { baseDir: store });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "Sort-Agent gestartet.");
+  assert.deepEqual(loadProject(root, store).items.map((item) => item.id), [1, 2]);
   assert.match(prompt, /Loaded project context/);
-  assert.doesNotMatch(prompt, /Priorisierungskriterium/);
+  assert.match(prompt, /piDeskContext/);
+  assert.match(prompt, /askUserQuestions/);
+  assert.match(prompt, /piDeskApplySort/);
+});
+
+test("piDeskContext only reads safe context files", async (t) => {
+  const root = tempDir(t);
+  writeFileSync(path.join(root, "README.md"), "clean readme");
+  writeFileSync(path.join(root, ".env"), "SECRET=1");
+  writeFileSync(path.join(root, "config.json"), '{"api_key":"no"}');
+
+  const tools = [];
+  piTodoExtension({ registerTool: (tool) => tools.push(tool), registerCommand: () => {}, on: () => {} });
+  const contextTool = tools.find((tool) => tool.name === "piDeskContext");
+
+  let result = await contextTool.execute("", { action: "list" }, undefined, undefined, { cwd: root });
+  assert.match(result.content[0].text, /README.md/);
+  assert.doesNotMatch(result.content[0].text, /.env/);
+  assert.doesNotMatch(result.content[0].text, /config.json/);
+
+  result = await contextTool.execute("", { action: "read", path: "README.md" }, undefined, undefined, { cwd: root });
+  assert.match(result.content[0].text, /clean readme/);
+
+  result = await contextTool.execute("", { action: "read", path: ".env" }, undefined, undefined, { cwd: root });
+  assert.equal(result.details.ok, false);
 });
 
 test("sort ignores unsafe loaded Pi context files", async (t) => {
@@ -295,12 +336,7 @@ test("sort ignores unsafe loaded Pi context files", async (t) => {
   writeFileSync(path.join(root, "ALT.md"), "clean alt");
   symlinkSync(path.join(root, ".env"), path.join(root, "docs", "linked.md"));
   let prompt = "";
-  const pi = {
-    exec: async (_command, args) => {
-      prompt = args.at(-1);
-      return { code: 0, stdout: '{"items":[{"id":2},{"id":1}]}' };
-    },
-  };
+  const pi = { sendUserMessage: (message) => { prompt = message; }, prepareSortTools: () => () => {} };
   const ctx = {
     cwd: root,
     hasUI: false,
@@ -318,6 +354,7 @@ test("sort ignores unsafe loaded Pi context files", async (t) => {
 
   await handleTodoCommand("first", ctx, pi, { baseDir: store });
   await handleTodoCommand("second", ctx, pi, { baseDir: store });
+  await handleTodoCommand("sort", ctx, pi, { baseDir: store });
 
   assert.doesNotMatch(prompt, /FOO=bar/);
   assert.doesNotMatch(prompt, /api_key=secret/);
@@ -326,26 +363,43 @@ test("sort ignores unsafe loaded Pi context files", async (t) => {
   assert.match(prompt, /safe context/);
 });
 
-test("sort failure keeps order when loaded Pi context throws", async (t) => {
+test("sort starts without loaded Pi context", async (t) => {
   const root = tempDir(t);
   const store = tempDir(t);
-  const messages = [];
+  let prompt = "";
+  const pi = { sendUserMessage: (message) => { prompt = message; }, prepareSortTools: () => () => {} };
   const ctx = {
     cwd: root,
     hasUI: false,
-    ui: { notify: (message) => messages.push(message) },
+    ui: { notify: () => {} },
     getSystemPromptOptions: () => {
       throw new Error("boom");
     },
   };
 
-  await handleTodoCommand("first", ctx, {}, { baseDir: store });
-  const result = await handleTodoCommand("second", ctx, {}, { baseDir: store });
+  await handleTodoCommand("first", ctx, pi, { baseDir: store });
+  await handleTodoCommand("second", ctx, pi, { baseDir: store });
+  const result = await handleTodoCommand("sort", ctx, pi, { baseDir: store });
 
   assert.equal(result.ok, true);
   assert.deepEqual(loadProject(root, store).items.map((item) => item.text), ["first", "second"]);
-  assert.deepEqual(result.project.items.map((item) => item.reason), ["", ""]);
-  assert.ok(messages.some((message) => /Priorisierung-Agent nicht verfügbar/.test(message)));
+  assert.match(prompt, /kein gespeicherter Kontext/);
+});
+
+test("sort requires tool allowlist before starting agent", async (t) => {
+  const root = tempDir(t);
+  const store = tempDir(t);
+  let started = false;
+  const pi = { sendUserMessage: () => { started = true; } };
+  const ctx = { cwd: root, hasUI: false, ui: { notify: () => {} } };
+
+  await handleTodoCommand("first", ctx, pi, { baseDir: store });
+  await handleTodoCommand("second", ctx, pi, { baseDir: store });
+  const result = await handleTodoCommand("sort", ctx, pi, { baseDir: store });
+
+  assert.equal(result.ok, false);
+  assert.equal(started, false);
+  assert.deepEqual(loadProject(root, store).items.map((item) => item.text), ["first", "second"]);
 });
 
 test("sort failure keeps order without fake reasons", async (t) => {
@@ -361,7 +415,7 @@ test("sort failure keeps order without fake reasons", async (t) => {
   assert.equal(result.ok, false);
   assert.deepEqual(result.project.items.map((item) => item.text), ["first", "second"]);
   assert.deepEqual(result.project.items.map((item) => item.reason), ["", ""]);
-  assert.ok(messages.some((message) => /Priorisierung-Agent nicht verfügbar/.test(message)));
+  assert.ok(messages.some((message) => /Sort-Agent nicht verfügbar/.test(message)));
 });
 
 test("command flow adds, lists, confirms clear", async (t) => {

@@ -19,13 +19,14 @@ pi install git:github.com/filipores/pi-desk
 ```text
 /todo                 show the ranked inbox
 /todo all             show open inbox entries from every stored project
-/todo <text>          add an inbox entry and prioritize
-/todo sort            reprioritize
+/todo <text>          add an inbox entry
+/todo sort            start the sorting agent
 /todo done <id>       delete an entry
 /todo move <id> <n>   set a manual rank
 /todo clear           delete all entries after confirmation
 /todo setup           choose project context files again
 ```
 
-Prioritization runs automatically from the current Pi/project context; `/todo setup`
-only adds extra project files. Data is stored locally under `~/.pi/agent/pi-desk/`.
+Adding never starts an agent. `/todo sort` starts the sorting agent; it can inspect
+filtered project context and ask open questions when needed. Data is stored locally under
+`~/.pi/agent/pi-desk/`.
